@@ -12,6 +12,7 @@ export function useContextRefinement() {
   const isRefining = ref(false)
   const refinementError = ref<string | null>(null)
   const lastRefinementTime = ref<Date | null>(null)
+  const processingTime = ref<number | null>(null) // New ref to track processing time
 
   /**
    * Refines the patient timeline context based on the user query
@@ -31,6 +32,9 @@ export function useContextRefinement() {
   ): Promise<string> => {
     isRefining.value = true
     refinementError.value = null
+    processingTime.value = null // Reset processing time
+
+    const clientStartTime = Date.now() // Track client-side total time
 
     try {
       const baseUrl = useLocalEndpoint ? ENDPOINTS.local : ENDPOINTS.production
@@ -55,12 +59,26 @@ export function useContextRefinement() {
       const data = await response.json()
       lastRefinementTime.value = new Date()
 
+      // Store the server-side processing time if available
+      if (data.processing_time_seconds !== undefined) {
+        processingTime.value = data.processing_time_seconds
+        console.log(`Server processing time: ${processingTime.value.toFixed(2)} seconds`)
+      } else {
+        // Calculate client-side time if server doesn't provide it
+        processingTime.value = (Date.now() - clientStartTime) / 1000
+        console.log(`Client-side total time: ${processingTime.value.toFixed(2)} seconds`)
+      }
+
       return data.relevant_context
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error during context refinement'
       refinementError.value = errorMessage
       console.error('Context refinement error:', error)
+
+      // Calculate client-side time for errors too
+      processingTime.value = (Date.now() - clientStartTime) / 1000
+      console.log(`Failed request time: ${processingTime.value.toFixed(2)} seconds`)
 
       // Return the original timeline if refinement fails
       return `Error refining context: ${errorMessage}\n\nOriginal timeline:\n${timeline}`
@@ -81,16 +99,21 @@ export function useContextRefinement() {
     refinedContext: string,
     timeRange?: { start: string; end: string }
   ) => {
+    // Add processing time to the context if available
+    const processingTimeInfo = processingTime.value
+      ? `\n[Context refined in ${processingTime.value.toFixed(2)} seconds]`
+      : ''
+
     if (appState.chatHistory.length > 0 && appState.chatHistory[0].role === 'system') {
       // Replace existing system message
       const timeRangeText = timeRange ? ` (${timeRange.start} to ${timeRange.end})` : ''
-      appState.chatHistory[0].content = `Timeline context${timeRangeText}:\n\n${refinedContext}`
+      appState.chatHistory[0].content = `Timeline context${timeRangeText}:${processingTimeInfo}\n\n${refinedContext}`
     } else {
       // Insert new system message at the beginning
       const timeRangeText = timeRange ? ` (${timeRange.start} to ${timeRange.end})` : ''
       appState.chatHistory.unshift({
         role: 'system',
-        content: `Timeline context${timeRangeText}:\n\n${refinedContext}`
+        content: `Timeline context${timeRangeText}:${processingTimeInfo}\n\n${refinedContext}`
       })
     }
   }
@@ -135,8 +158,11 @@ export function useContextRefinement() {
         useLocalEndpoint
       )
 
-      // Add this line to see the refined context
-      console.log('Refined context from DeepSeek uc:', refinedContext)
+      // Add this line to see the refined context and processing time
+      console.log(
+        `Refined context from DeepSeek (${processingTime.value?.toFixed(2)}s):`,
+        refinedContext
+      )
 
       // Update the system message with the refined context
       updateSystemMessageWithRefinedContext(appState, refinedContext, timeRange)
@@ -157,6 +183,7 @@ export function useContextRefinement() {
     isRefining,
     refinementError,
     lastRefinementTime,
+    processingTime, // Expose the processing time
     refineContext,
     updateSystemMessageWithRefinedContext,
     prepareRelevantContext
